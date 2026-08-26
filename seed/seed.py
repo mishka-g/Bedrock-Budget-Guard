@@ -80,7 +80,7 @@ def main() -> None:
             iam.create_role(
                 RoleName=role["name"],
                 AssumeRolePolicyDocument=json.dumps(TRUST_POLICY),
-                Description="seeded workload role for the budget-tool assignment",
+                Description="seeded workload role for Bedrock Budget Guard demo",
             )
             print(f"seed: created role {role['name']}")
         except iam.exceptions.EntityAlreadyExistsException:
