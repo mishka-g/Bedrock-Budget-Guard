@@ -1,0 +1,31 @@
+# Run Bedrock Budget Guard against real AWS (no ministack / seed / generator).
+# Local demo stays on docker-compose.yaml — do not mix the two stacks.
+#
+# Setup:
+#   cp .env.aws.example .env.aws
+#   cp budget-guard/config.aws.example.yaml budget-guard/config.aws.yaml
+#   # edit both files, then:
+#   make aws-up
+
+services:
+  budget-guard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bedrock-budget-guard:latest
+    env_file:
+      - .env.aws
+    environment:
+      BUDGET_GUARD_CONFIG: /app/config.yaml
+      BUDGET_GUARD_STATE: /app/state/state.json
+      # Force real AWS (overrides a mistaken AWS_ENDPOINT_URL in .env.aws).
+      AWS_ENDPOINT_URL: ""
+    volumes:
+      - ./budget-guard/config.aws.yaml:/app/config.yaml:ro
+      - budget-guard-aws-state:/app/state
+      # Optional: host credentials instead of keys in .env.aws
+      # - ${HOME}/.aws:/root/.aws:ro
+    restart: unless-stopped
+
+volumes:
+  budget-guard-aws-state:

@@ -5,14 +5,12 @@ usage crosses thresholds, and **pauses** Bedrock for over-budget projects by
 attaching an IAM Deny. When the budget day resets—or you turn enforcement
 off—access is restored.
 
-Projects come from the IAM tag `project` on workload roles (for example
-`alpha`, `beta`, `shared`). See [DESIGN.md](DESIGN.md) for architecture and
-trade-offs.
+Projects come from the IAM tag `project` on workload roles. See
+[DESIGN.md](DESIGN.md) for architecture and trade-offs.
 
 ## Local demo (Docker)
 
-The repo includes a ministack emulator, seed IAM roles/log group, a log
-generator, and the guard daemon.
+Full stack: ministack emulator + seed + generator + guard.
 
 ```bash
 cp .env.example .env
@@ -20,15 +18,8 @@ make up
 make logs-guard   # STATUS / ALERT / BLOCKED / UNBLOCKED
 ```
 
-Tear down (also removes the guard state volume):
-
 ```bash
-make down
-```
-
-Unit tests:
-
-```bash
+make down    # also removes the guard state volume
 make test
 ```
 
@@ -40,47 +31,80 @@ make test
 3. Set `projects.alpha.enforce: false` in [`budget-guard/config.yaml`](budget-guard/config.yaml)
    → `UNBLOCKED` within one poll.
 
-## Real AWS
+## Real AWS (Docker)
 
-The guard talks to CloudWatch Logs and IAM via boto3. For production:
+Guard-only image/compose — **separate** from the local demo. Use a test
+account first; start with `enforce: false` until STATUS looks right.
 
-1. Tag workload roles with `project=<name>` matching keys under `projects:` in
-   [`budget-guard/config.yaml`](budget-guard/config.yaml).
-2. Point `log_group` at your Bedrock model invocation log group (default in
-   config: `/aws/bedrock/modelinvocations`).
-3. Give the guard identity permission to:
-   - `logs:FilterLogEvents` on that log group
-   - `iam:ListRoles`, `iam:ListRoleTags`, `iam:GetRolePolicy`,
-     `iam:PutRolePolicy`, `iam:DeleteRolePolicy` on the roles it may manage
-4. Run without `AWS_ENDPOINT_URL` (standard AWS endpoints). Example:
+### 1. AWS prerequisites
+
+1. Enable [Bedrock model invocation logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html) to CloudWatch.
+2. Tag workload roles: `project=<name>` (must match keys under `projects:` in config).
+3. Create an IAM user/role for the guard and attach [`deploy/iam-policy.json`](deploy/iam-policy.json)
+   (see [`deploy/README.md`](deploy/README.md)). Adjust the log-group ARN to your
+   account/region before production.
+
+### 2. Config and credentials
 
 ```bash
-cd budget-guard
-pip install -r requirements.txt
-unset AWS_ENDPOINT_URL
-export AWS_DEFAULT_REGION=eu-west-1
-# credentials via env, profile, or instance/role
-export BUDGET_GUARD_CONFIG=./config.yaml
-export BUDGET_GUARD_STATE=./state/state.json
-mkdir -p state
-python main.py
+cp .env.aws.example .env.aws
+cp budget-guard/config.aws.example.yaml budget-guard/config.aws.yaml
 ```
 
-Or run only the guard container against real AWS by mounting config/state and
-passing real credentials—omit `AWS_ENDPOINT_URL` from the environment.
+Edit `.env.aws` (`AWS_DEFAULT_REGION` + keys, or use a mounted `~/.aws` profile).
+Edit `budget-guard/config.aws.yaml`: `log_group`, `projects`, `pricing_per_million_usd`
+for models you actually invoke. Do **not** set `AWS_ENDPOINT_URL`.
 
-Tune `budget_usd`, `pricing_per_million_usd`, and `alert_thresholds` for your
-account and region. Demo rates are US-style list prices sized for the local
-simulator.
+### 3. Run
+
+```bash
+make aws-up
+make aws-logs
+```
+
+Same thing with Compose directly:
+
+```bash
+docker compose -f docker-compose.aws.yaml up -d --build
+docker compose -f docker-compose.aws.yaml logs -f budget-guard
+```
+
+Or build/run the image yourself:
+
+```bash
+docker build -t bedrock-budget-guard .
+docker run --rm \
+  --env-file .env.aws \
+  -e AWS_ENDPOINT_URL= \
+  -e BUDGET_GUARD_CONFIG=/app/config.yaml \
+  -e BUDGET_GUARD_STATE=/app/state/state.json \
+  -v "$PWD/budget-guard/config.aws.yaml:/app/config.yaml:ro" \
+  -v budget-guard-aws-state:/app/state \
+  bedrock-budget-guard
+```
+
+Tear down:
+
+```bash
+make aws-down
+```
+
+### Safe test checklist
+
+1. `enforce: false` for all projects → watch `STATUS` / spend climb with real traffic.
+2. Confirm unknown `modelId`s only produce `WARN` (add prices; we never invent them).
+3. Flip `enforce: true` on one low-budget test project → expect `BLOCKED` and an
+   inline policy `BudgetGuardDenyBedrock` on that project’s roles.
+4. Set `enforce: false` again → `UNBLOCKED` within one poll.
 
 ## Config
 
-Edit [`budget-guard/config.yaml`](budget-guard/config.yaml) on the host. In
-Compose it is mounted read-only; the process **reloads it every poll**
-(default ~15 seconds). No rebuild needed for normal edits.
+| Mode | File |
+|---|---|
+| Local demo | [`budget-guard/config.yaml`](budget-guard/config.yaml) |
+| Real AWS | `budget-guard/config.aws.yaml` (from the example; gitignored) |
 
-Spend / watermark / blocked set persist under `/app/state/state.json`
-(Compose volume `budget-guard-state`). `make down` wipes that volume.
+Both are mounted read-only and **reloaded every poll** — no rebuild for normal edits.
 
 | What you want | What to edit |
 |---|---|
@@ -91,16 +115,15 @@ Spend / watermark / blocked set persist under `/app/state/state.json`
 | How often it checks | `poll_interval_seconds` |
 | Token → dollar rates | `pricing_per_million_usd` |
 
-Unknown models are skipped with a warning—we never invent a price.
-
-Default demo budgets: **alpha $2/day**, **beta $50/day**, **shared $50/day**.
-
 ## Layout
 
 | Path | Role |
 |---|---|
-| `budget-guard/` | Guard daemon, config, unit tests |
-| `seed/` | Creates log group + tagged IAM roles (local demo) |
-| `generator/` | Writes Bedrock-style invocation logs (local demo) |
-| `docker-compose.yaml` | ministack + seed + generator + guard |
+| `budget-guard/` | Guard daemon, local config, unit tests |
+| `budget-guard/Dockerfile` | Image for **local demo** Compose |
+| `Dockerfile` | Standalone / **real AWS** image |
+| `docker-compose.yaml` | Local demo stack |
+| `docker-compose.aws.yaml` | Guard only → real AWS |
+| `deploy/iam-policy.json` | IAM permissions for the guard |
+| `seed/` / `generator/` | Local demo only |
 | `DESIGN.md` | Product design and trade-offs |

@@ -1,0 +1,43 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadBedrockInvocationLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:FilterLogEvents",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:/aws/bedrock/modelinvocations",
+        "arn:aws:logs:*:*:log-group:/aws/bedrock/modelinvocations:*"
+      ]
+    },
+    {
+      "Sid": "DiscoverTaggedWorkloadRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:ListRoles",
+        "iam:ListRoleTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageBudgetGuardDenyOnTaggedRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies"
+      ],
+      "Resource": "arn:aws:iam::*:role/*",
+      "Condition": {
+        "Null": {
+          "iam:ResourceTag/project": "false"
+        }
+      }
+    }
+  ]
+}

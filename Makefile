@@ -1,4 +1,6 @@
-.PHONY: up down logs logs-guard test smoke
+.PHONY: up down logs logs-guard test smoke aws-up aws-down aws-logs aws-build
+
+# --- Local demo (ministack + seed + generator + guard) ---
 
 up:
 	docker compose up -d --build
@@ -20,3 +22,17 @@ test:
 
 smoke:
 	docker compose --profile smoke run --rm --build smoke
+
+# --- Real AWS (guard only; requires .env.aws + config.aws.yaml) ---
+
+aws-build:
+	docker build -t bedrock-budget-guard .
+
+aws-up:
+	docker compose -f docker-compose.aws.yaml up -d --build
+
+aws-down:
+	docker compose -f docker-compose.aws.yaml down -v
+
+aws-logs:
+	docker compose -f docker-compose.aws.yaml logs -f budget-guard

@@ -1,0 +1,44 @@
+# Copy to config.aws.yaml and edit for your account:
+#   cp budget-guard/config.aws.example.yaml budget-guard/config.aws.yaml
+#
+# Prerequisites on the AWS side:
+#   1. Bedrock model invocation logging → CloudWatch (log_group below)
+#   2. Workload IAM roles tagged project=<name> matching keys under projects:
+#   3. Guard identity has permissions from deploy/iam-policy.json
+
+poll_interval_seconds: 30
+
+# Must match your Bedrock → CloudWatch log group name.
+log_group: /aws/bedrock/modelinvocations
+
+alert_thresholds: [0.8, 1.0]
+
+# Replace with your project tag values and daily dollar caps.
+# Start with enforce: false until STATUS lines look right, then flip to true.
+projects:
+  my-team:
+    budget_usd: 10.0
+    enforce: false
+  # another-team:
+  #   budget_usd: 50.0
+  #   enforce: true
+
+# USD per 1 million tokens. Add every modelId you see in the log group.
+# Use your region's list prices (https://aws.amazon.com/bedrock/pricing/).
+pricing_per_million_usd:
+  "anthropic.claude-3-5-haiku-20241022-v1:0":
+    input: 0.8
+    output: 4.0
+    cache_read: 0.08
+    cache_write: 1.0
+  "anthropic.claude-3-5-sonnet-20241022-v2:0":
+    input: 3.0
+    output: 15.0
+    cache_read: 0.3
+    cache_write: 3.75
+  # Cross-region inference profiles often look like:
+  # "eu.anthropic.claude-sonnet-4-5-20250929-v1:0":
+  #   input: 3.0
+  #   output: 15.0
+  #   cache_read: 0.3
+  #   cache_write: 3.75
