@@ -1,0 +1,67 @@
+# =============================================================================
+# Bedrock Budget Guard — settings anyone can edit
+# =============================================================================
+# After you change this file, wait about one poll interval (default 15s).
+# The tool reloads it by itself — no rebuild, no container restart.
+#
+# Same-day unblock (without waiting for midnight UTC):
+#   1. Set projects.<name>.enforce: false  → Deny is lifted on the next poll
+#   2. Or raise budget_usd above today's spend → Deny lifts when spend < budget
+# Set enforce back to true when automatic blocking should resume.
+# =============================================================================
+
+# How often to check usage (seconds). Smaller = faster alerts, more API calls.
+poll_interval_seconds: 15
+
+# Where Bedrock writes usage logs (do not change unless you know why).
+log_group: /aws/bedrock/modelinvocations
+
+# Warn when a project has used this fraction of its daily budget.
+# 0.8 = 80% used. 1.0 = 100% used (also triggers a block if enforce is on).
+alert_thresholds: [0.8, 1.0]
+
+# Money limits per project for one UTC calendar day (midnight to midnight UTC).
+# IMPORTANT (FinOps): values are US DOLLARS of estimated Bedrock spend —
+# e.g. 2.0 = $2.00/day. They are NOT token counts and NOT "millions of tokens".
+# Tokens are priced separately in pricing_per_million_usd below.
+# Project names must match the "project" tag on IAM roles (alpha, beta, shared).
+projects:
+  alpha:
+    # Daily spend limit in US DOLLARS (money), NOT tokens and NOT "millions".
+    # Example: 2.0 means two dollars ($2.00) of Bedrock cost per UTC day.
+    # Token usage is converted to dollars using pricing_per_million_usd below.
+    # ~$2 trips within ~2 minutes under the simulator's alpha traffic (~$1.2/min).
+    budget_usd: 2.0
+    # true  = automatically block Bedrock when this dollar budget is used up
+    # false = never block this project (use this to unblock without waiting
+    #         for midnight; set back to true when blocking should resume)
+    enforce: true
+  beta:
+    # $50.00 USD per UTC day (money), not 50 million tokens.
+    budget_usd: 50.0
+    enforce: true
+  shared:
+    # $50.00 USD per UTC day (money), not 50 million tokens.
+    budget_usd: 50.0
+    enforce: true
+
+# Prices used to turn token counts into DOLLARS (USD per 1 million tokens).
+# These are rates, not budgets. FinOps: budget_usd above is the dollar cap;
+# this section is only how we price each token type.
+# pricing_as_of: 2026-08-25 — update when AWS changes Bedrock prices.
+# NOTE (FinOps / regions): figures below match public US-style Bedrock list
+# prices so the local demo lines up with the simulator (~$1.2/min for alpha).
+# Real eu-west-1 regional endpoints can be ~10% higher — adjust if you need
+# region-accurate estimates; do not confuse these rates with budget_usd.
+pricing_per_million_usd:
+  # Quote modelIds — they contain a colon (":0") which YAML can misread if bare.
+  "eu.anthropic.claude-haiku-4-5-20251001-v1:0":
+    input: 1.0
+    output: 5.0
+    cache_read: 0.1
+    cache_write: 1.25
+  "eu.anthropic.claude-sonnet-4-5-20250929-v1:0":
+    input: 3.0
+    output: 15.0
+    cache_read: 0.3
+    cache_write: 3.75

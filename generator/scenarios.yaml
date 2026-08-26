@@ -1,0 +1,51 @@
+# Deterministic traffic plan for the bedrock-simulator.
+# Same seed => same event stream, minute by minute.
+seed: 42
+
+baseline:
+  # Heavy consumer from minute zero: large-context calls at a steady
+  # rate, so its project's spend climbs fast (about $1.2/min at public
+  # Haiku pricing) and a small daily budget is crossed within the
+  # first couple of traffic minutes.
+  - role: proj-alpha-app
+    model: eu.anthropic.claude-haiku-4-5-20251001-v1:0
+    callsPerMinute: 8
+    tokens:
+      input: {mean: 120000, spread: 30000}
+      output: {mean: 4000, spread: 1500}
+      cacheRead: {mean: 40000, spread: 20000}
+      cacheWrite: {mean: 2000, spread: 1000}
+
+  # Second role in project alpha: modest steady spend, never bursts.
+  # Its purpose is the multi-role budget case: when proj-alpha-app
+  # drains the shared alpha budget, this role must be blocked too.
+  - role: proj-alpha-batch
+    model: eu.anthropic.claude-haiku-4-5-20251001-v1:0
+    callsPerMinute: 2
+    tokens:
+      input: {mean: 1200, spread: 400}
+      output: {mean: 300, spread: 120}
+      cacheRead: {mean: 200, spread: 150}
+      cacheWrite: {mean: 20, spread: 20}
+
+  - role: proj-beta-app
+    model: eu.anthropic.claude-sonnet-4-5-20250929-v1:0
+    callsPerMinute: 2
+    tokens:
+      input: {mean: 1500, spread: 500}
+      output: {mean: 500, spread: 200}
+      cacheRead: {mean: 300, spread: 200}
+      cacheWrite: {mean: 30, spread: 30}
+
+  - role: ai-developers
+    model: eu.anthropic.claude-haiku-4-5-20251001-v1:0
+    callsPerMinute: 3
+    tokens:
+      input: {mean: 1000, spread: 400}
+      output: {mean: 300, spread: 120}
+      cacheRead: {mean: 200, spread: 150}
+      cacheWrite: {mean: 20, spread: 20}
+
+# Scripted timeline events (rate multipliers per role for a window).
+# None currently: the alpha crossing comes from its hot baseline above.
+timeline: []
