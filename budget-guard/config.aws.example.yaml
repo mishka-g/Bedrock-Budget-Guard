@@ -13,6 +13,13 @@ log_group: /aws/bedrock/modelinvocations
 
 alert_thresholds: [0.8, 1.0]
 
+# Optional Slack Incoming Webhook. Prefer SLACK_WEBHOOK_URL in .env.aws.
+alerts:
+  slack:
+    enabled: false
+    webhook_url: ""
+    events: [ALERT, BLOCKED, UNBLOCKED]
+
 # Replace with your project tag values and daily dollar caps.
 # Start with enforce: false until STATUS lines look right, then flip to true.
 projects:

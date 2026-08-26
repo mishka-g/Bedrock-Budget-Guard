@@ -114,6 +114,17 @@ Both are mounted read-only and **reloaded every poll** — no rebuild for normal
 | Warn earlier / later | `alert_thresholds` (e.g. `[0.8, 1.0]`) |
 | How often it checks | `poll_interval_seconds` |
 | Token → dollar rates | `pricing_per_million_usd` |
+| Slack notifications | `alerts.slack` (+ optional `SLACK_WEBHOOK_URL`) |
+
+### Slack
+
+1. Create a Slack [Incoming Webhook](https://api.slack.com/messaging/webhooks).
+2. In config set `alerts.slack.enabled: true` and either:
+   - export `SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...`, or
+   - set `alerts.slack.webhook_url` (env wins if both are set).
+3. Default `events`: `ALERT`, `BLOCKED`, `UNBLOCKED` (not `STATUS`).
+
+Stdout always continues; Slack failures are logged as `WARN` and ignored.
 
 ## Layout
 

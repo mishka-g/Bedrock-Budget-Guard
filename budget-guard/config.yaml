@@ -20,6 +20,15 @@ log_group: /aws/bedrock/modelinvocations
 # 0.8 = 80% used. 1.0 = 100% used (also triggers a block if enforce is on).
 alert_thresholds: [0.8, 1.0]
 
+# Optional Slack Incoming Webhook. Stdout always stays on.
+# Prefer SLACK_WEBHOOK_URL in the environment (overrides webhook_url below).
+alerts:
+  slack:
+    enabled: false
+    webhook_url: ""
+    # STATUS every poll would spam — keep these for meaningful events.
+    events: [ALERT, BLOCKED, UNBLOCKED]
+
 # Money limits per project for one UTC calendar day (midnight to midnight UTC).
 # IMPORTANT (FinOps): values are US DOLLARS of estimated Bedrock spend —
 # e.g. 2.0 = $2.00/day. They are NOT token counts and NOT "millions of tokens".

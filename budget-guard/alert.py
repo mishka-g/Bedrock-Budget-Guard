@@ -1,16 +1,70 @@
-"""Human-readable stdout alerts and STATUS heartbeats (not JSON)."""
+"""Human-readable stdout alerts and optional Slack webhooks (not JSON)."""
 from __future__ import annotations
 
+import json
+import os
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
+from typing import Any
+
+# Reloaded from config each poll via configure().
+_slack_enabled: bool = False
+_slack_webhook_url: str = ""
+_slack_events: set[str] = {"ALERT", "BLOCKED", "UNBLOCKED"}
+_DEFAULT_SLACK_EVENTS = ("ALERT", "BLOCKED", "UNBLOCKED")
+
+
+def configure(cfg: dict[str, Any] | None) -> None:
+    """Apply alerts.slack from config. Env SLACK_WEBHOOK_URL overrides webhook_url."""
+    global _slack_enabled, _slack_webhook_url, _slack_events
+
+    alerts = (cfg or {}).get("alerts") or {}
+    slack = alerts.get("slack") if isinstance(alerts, dict) else None
+    if not isinstance(slack, dict):
+        _slack_enabled = False
+        _slack_webhook_url = ""
+        _slack_events = set(_DEFAULT_SLACK_EVENTS)
+        return
+
+    env_url = (os.environ.get("SLACK_WEBHOOK_URL") or "").strip()
+    cfg_url = str(slack.get("webhook_url") or "").strip()
+    _slack_webhook_url = env_url or cfg_url
+    _slack_enabled = bool(slack.get("enabled")) and bool(_slack_webhook_url)
+
+    raw_events = slack.get("events")
+    if isinstance(raw_events, list) and raw_events:
+        _slack_events = {str(e).strip().upper() for e in raw_events if str(e).strip()}
+    else:
+        _slack_events = set(_DEFAULT_SLACK_EVENTS)
 
 
 def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
 
 
+def _post_slack(kind: str, message: str) -> None:
+    if not _slack_enabled or kind.upper() not in _slack_events:
+        return
+    body = json.dumps({"text": f"*[{kind}]* {message}"}).encode("utf-8")
+    req = urllib.request.Request(
+        _slack_webhook_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
+        # Stdout only — do not recurse into Slack.
+        print(f"[{_ts()}] {'WARN':<8} Slack webhook failed: {exc}", flush=True)
+
+
 def log_line(kind: str, message: str) -> None:
     """Print one plain-text line, e.g. [14:52:01] ALERT   ..."""
     print(f"[{_ts()}] {kind:<8} {message}", flush=True)
+    _post_slack(kind, message)
 
 
 def status_line(projects_cfg: dict, spend: dict[str, float]) -> None:

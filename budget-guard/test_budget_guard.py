@@ -354,3 +354,94 @@ def test_discover_blocked_projects_from_iam():
         "proj-beta-app": "beta",
     }
     assert enforce.discover_blocked_projects(iam, role_map) == {"alpha"}
+
+
+# --- slack alerts ---
+
+def test_slack_configure_disabled_without_webhook(monkeypatch):
+    import alert as alert_mod
+
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    alert_mod.configure({
+        "alerts": {"slack": {"enabled": True, "webhook_url": "", "events": ["ALERT"]}},
+    })
+    assert alert_mod._slack_enabled is False
+
+
+def test_slack_env_overrides_config_url(monkeypatch):
+    import alert as alert_mod
+
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.example/env")
+    alert_mod.configure({
+        "alerts": {
+            "slack": {
+                "enabled": True,
+                "webhook_url": "https://hooks.example/cfg",
+                "events": ["ALERT", "BLOCKED"],
+            },
+        },
+    })
+    assert alert_mod._slack_enabled is True
+    assert alert_mod._slack_webhook_url == "https://hooks.example/env"
+    assert alert_mod._slack_events == {"ALERT", "BLOCKED"}
+
+
+def test_slack_posts_for_alert_not_status(monkeypatch):
+    import alert as alert_mod
+
+    posts: list[bytes] = []
+
+    class FakeResp:
+        def read(self):
+            return b"ok"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=5):
+        posts.append(req.data)
+        return FakeResp()
+
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.setattr(alert_mod.urllib.request, "urlopen", fake_urlopen)
+    alert_mod.configure({
+        "alerts": {
+            "slack": {
+                "enabled": True,
+                "webhook_url": "https://hooks.example/test",
+                "events": ["ALERT", "BLOCKED", "UNBLOCKED"],
+            },
+        },
+    })
+    alert_mod.alert_threshold("alpha", 0.8, 1.6, 2.0)
+    alert_mod.status_line({"alpha": {"budget_usd": 2.0}}, {"alpha": 1.6})
+    assert len(posts) == 1
+    assert b"ALERT" in posts[0]
+    assert b"STATUS" not in posts[0]
+
+
+def test_slack_failure_is_soft(monkeypatch, capsys):
+    import alert as alert_mod
+    import urllib.error
+
+    def boom(req, timeout=5):
+        raise urllib.error.URLError("down")
+
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.setattr(alert_mod.urllib.request, "urlopen", boom)
+    alert_mod.configure({
+        "alerts": {
+            "slack": {
+                "enabled": True,
+                "webhook_url": "https://hooks.example/test",
+                "events": ["BLOCKED"],
+            },
+        },
+    })
+    alert_mod.blocked("alpha", ["proj-alpha-app"])
+    err = capsys.readouterr().out
+    assert "BLOCKED" in err
+    assert "Slack webhook failed" in err

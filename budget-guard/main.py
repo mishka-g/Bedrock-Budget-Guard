@@ -68,6 +68,7 @@ def load_config(path: Path) -> dict[str, Any] | None:
         cfg.setdefault("poll_interval_seconds", 15)
         cfg.setdefault("log_group", "/aws/bedrock/modelinvocations")
         cfg.setdefault("alert_thresholds", [0.8, 1.0])
+        alert.configure(cfg)
         return cfg
     except Exception as exc:
         logger.warning("Failed to load config from %s: %s", path, exc)
@@ -278,6 +279,7 @@ def run_loop() -> None:
 
     cfg = load_config(CONFIG_PATH)
     if cfg is None:
+        alert.configure(None)
         alert.warn("No usable config on startup; retrying each poll")
         cfg = {
             "poll_interval_seconds": 15,

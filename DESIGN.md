@@ -97,6 +97,11 @@ Human-readable lines on stdout (`STATUS`, `ALERT`, `BLOCKED`,
 per project per threshold per UTC day** (persisted across restarts within
 the same UTC day). Operators use `make logs-guard` in the local demo.
 
+Optional Slack Incoming Webhooks are driven by `alerts.slack` in config
+(hot-reloaded). Default events are `ALERT` / `BLOCKED` / `UNBLOCKED` —
+not `STATUS`. `SLACK_WEBHOOK_URL` overrides `webhook_url`. Failures are
+soft (`WARN` on stdout).
+
 `BLOCKED` is emitted only when at least one `put_role_policy` succeeds.
 If every IAM put fails, we warn and retry on the next poll — we do not
 claim the project is paused.
@@ -189,6 +194,6 @@ FinOps day to day.
 
 ### Alerts
 
-Push notifications beyond container stdout—webhooks, Slack, PagerDuty,
-or email—with the same once-per-threshold semantics (and routing by
-project). Stdout stays useful for local review.
+Push notifications beyond Slack Incoming Webhooks—PagerDuty, email, or
+richer routing by project—with the same once-per-threshold semantics.
+Stdout stays useful for local review.
