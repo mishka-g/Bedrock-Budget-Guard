@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.error
+import threading
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
@@ -33,7 +33,10 @@ def configure(cfg: dict[str, Any] | None) -> None:
     _slack_enabled = bool(slack.get("enabled")) and bool(_slack_webhook_url)
 
     raw_events = slack.get("events")
-    if isinstance(raw_events, list) and raw_events:
+    if raw_events is None:
+        _slack_events = set(_DEFAULT_SLACK_EVENTS)
+    elif isinstance(raw_events, list):
+        # Explicit empty list means "mute all" — distinct from omitting the key.
         _slack_events = {str(e).strip().upper() for e in raw_events if str(e).strip()}
     else:
         _slack_events = set(_DEFAULT_SLACK_EVENTS)
@@ -43,22 +46,31 @@ def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
 
 
+def _send_slack(url: str, body: bytes) -> None:
+    try:
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            resp.read()
+    except Exception as exc:
+        # Any failure here (bad URL, timeout, DNS, HTTP error) is soft —
+        # stdout only, never let it recurse into Slack or reach the caller.
+        print(f"[{_ts()}] {'WARN':<8} Slack webhook failed: {exc}", flush=True)
+
+
 def _post_slack(kind: str, message: str) -> None:
     if not _slack_enabled or kind.upper() not in _slack_events:
         return
     body = json.dumps({"text": f"*[{kind}]* {message}"}).encode("utf-8")
-    req = urllib.request.Request(
-        _slack_webhook_url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            resp.read()
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
-        # Stdout only — do not recurse into Slack.
-        print(f"[{_ts()}] {'WARN':<8} Slack webhook failed: {exc}", flush=True)
+    # Off the main poll/enforcement thread: a slow or unreachable webhook
+    # must never delay IAM enforcement for other projects.
+    threading.Thread(
+        target=_send_slack, args=(_slack_webhook_url, body), daemon=True,
+    ).start()
 
 
 def log_line(kind: str, message: str) -> None:
