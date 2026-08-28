@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -445,3 +446,90 @@ def test_slack_failure_is_soft(monkeypatch, capsys):
     err = capsys.readouterr().out
     assert "BLOCKED" in err
     assert "Slack webhook failed" in err
+
+
+def test_slack_empty_events_list_mutes_all(monkeypatch):
+    """An explicit `events: []` means mute, not 'use the default set'."""
+    import alert as alert_mod
+
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    alert_mod.configure({
+        "alerts": {
+            "slack": {
+                "enabled": True,
+                "webhook_url": "https://hooks.example/test",
+                "events": [],
+            },
+        },
+    })
+    assert alert_mod._slack_events == set()
+
+
+def test_slack_malformed_url_does_not_crash(monkeypatch, capsys):
+    """A bad webhook URL (e.g. missing scheme) must not raise into the caller."""
+    import alert as alert_mod
+
+    class SyncThread:
+        """Run the target inline so the test can assert deterministically."""
+
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.setattr(alert_mod.threading, "Thread", SyncThread)
+    alert_mod.configure({
+        "alerts": {
+            "slack": {
+                "enabled": True,
+                "webhook_url": "hooks.slack.com/services/T00/B00/XXX",  # no scheme
+                "events": ["ALERT"],
+            },
+        },
+    })
+    alert_mod.alert_threshold("alpha", 0.8, 1.6, 2.0)  # must not raise
+    out = capsys.readouterr().out
+    assert "ALERT" in out
+    assert "Slack webhook failed" in out
+
+
+def test_slack_post_does_not_block_caller(monkeypatch):
+    """A slow/hanging webhook must not delay the enforcement loop."""
+    import alert as alert_mod
+    import threading as real_threading
+
+    release = real_threading.Event()
+
+    class FakeResp:
+        def read(self):
+            return b"ok"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def slow_urlopen(req, timeout=5):
+        release.wait(2)
+        return FakeResp()
+
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.setattr(alert_mod.urllib.request, "urlopen", slow_urlopen)
+    alert_mod.configure({
+        "alerts": {
+            "slack": {
+                "enabled": True,
+                "webhook_url": "https://hooks.example/test",
+                "events": ["ALERT"],
+            },
+        },
+    })
+    start = time.monotonic()
+    alert_mod.alert_threshold("alpha", 0.8, 1.6, 2.0)
+    elapsed = time.monotonic() - start
+    release.set()
+    assert elapsed < 1.0
