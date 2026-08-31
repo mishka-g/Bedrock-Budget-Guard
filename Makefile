@@ -1,4 +1,4 @@
-.PHONY: up down logs logs-guard test smoke aws-up aws-down aws-logs aws-build
+.PHONY: up down logs logs-guard test test-unit smoke aws-up aws-down aws-logs aws-build
 
 # --- Local demo (ministack + seed + generator + guard) ---
 
@@ -19,6 +19,13 @@ test:
 	docker compose run --rm --no-deps generator pytest -q
 	docker compose build budget-guard
 	docker compose run --rm --no-deps budget-guard pytest -q
+
+# Native pytest (no Docker, no .env). Install deps first:
+#   pip install -r budget-guard/requirements.txt -r budget-guard/requirements-dev.txt
+#   pip install boto3 pyyaml pytest   # generator
+test-unit:
+	cd budget-guard && pytest -q
+	cd generator && pytest -q
 
 smoke:
 	docker compose --profile smoke run --rm --build smoke
