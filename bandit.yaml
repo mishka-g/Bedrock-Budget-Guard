@@ -1,0 +1,5 @@
+# Metrics HTTP server must bind 0.0.0.0 for the Kubernetes Service.
+# Slack webhook / healthcheck URLs are operator-configured, not request input.
+skips:
+  - B104
+  - B310

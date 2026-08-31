@@ -22,8 +22,13 @@ make logs-guard   # STATUS / ALERT / BLOCKED / UNBLOCKED
 
 ```bash
 make down    # also removes the guard state volume
-make test
+make test        # pytest via Compose images
+make test-unit   # pytest on the host (what CI runs)
 ```
+
+Pull requests and pushes to `main` run GitHub Actions: unit tests and
+security checks (pip-audit, bandit, gitleaks, Checkov), then a Docker
+image build and Trivy scan. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ### Quick verify
 
@@ -162,5 +167,6 @@ Stdout always continues; Slack failures are logged as `WARN` and ignored.
 | `deploy/k8s/` | Kubernetes manifests (2 replicas, Lease, ConfigMap state) |
 | `deploy/grafana/budget-guard.json` | Grafana dashboard |
 | `deploy/iam-policy.json` | IAM permissions for the guard |
+| `.github/workflows/ci.yml` | PR/main CI: tests, security, image build |
 | `seed/` / `generator/` | Local demo only |
 | `DESIGN.md` | Product design and trade-offs |

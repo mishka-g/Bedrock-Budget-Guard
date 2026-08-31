@@ -1,0 +1,13 @@
+# Checkov skips: template manifests use a mutable tag for kind/minikube;
+# the cluster needs the SA token for Lease + ConfigMap state; AppArmor /
+# seccomp / NetworkPolicy are cluster-policy concerns, not this app.
+skip-check:
+  - CKV_K8S_43   # image digest pin
+  - CKV_K8S_14   # image tag not latest (deploy template uses :latest)
+  - CKV_K8S_15   # imagePullPolicy Always when tag is latest
+  - CKV_K8S_31   # AppArmor annotation
+  - CKV_K8S_37   # drop NET_RAW (covered by drop ALL)
+  - CKV_K8S_38   # automountServiceAccountToken — required for leader election
+  - CKV_K8S_49   # seccomp profile
+  - CKV2_K8S_6   # NetworkPolicy
+  - CKV_K8S_35   # Slack webhook via env (Incoming Webhook is a URL, not a file secret)
