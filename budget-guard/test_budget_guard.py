@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import enforce
 import main
+import metrics
 import roles
 import state as persist
 from cost import event_cost_usd
@@ -305,10 +306,13 @@ def test_state_roundtrip(tmp_path: Path):
     path = tmp_path / "state.json"
     tracker = SpendTracker()
     tracker.add_spend("alpha", 1.25)
-    tracker.mark_seen("evt-9")
+    tracker.mark_seen("evt-9", ts_ms=42_000)
     tracker.thresholds_to_fire("alpha", 2.0, [0.5, 0.8])  # 1.25/2 = 62.5% → 0.5
     blocked = {"alpha"}
-    persist.save_state(path, tracker, blocked, watermark_ms=42_000)
+    assert persist.save_state(path, tracker, blocked, watermark_ms=42_000)
+
+    payload = json.loads(path.read_text())
+    assert "seen_event_ids" not in payload
 
     loaded = persist.load_state(path)
     t2 = SpendTracker()
@@ -316,7 +320,8 @@ def test_state_roundtrip(tmp_path: Path):
     wm = persist.apply_state(t2, b2, loaded)
     assert wm == 42_000
     assert t2.get_spend("alpha") == 1.25
-    assert t2.already_seen("evt-9")
+    # Seen IDs are in-memory only (overlap window); compact state omits them.
+    assert not t2.already_seen("evt-9")
     assert b2 == {"alpha"}
     assert 0.5 in t2.fired_thresholds["alpha"]
 
@@ -533,3 +538,330 @@ def test_slack_post_does_not_block_caller(monkeypatch):
     elapsed = time.monotonic() - start
     release.set()
     assert elapsed < 1.0
+
+
+# --- overlap-window dedup / compact state ---
+
+def test_prune_seen_drops_ids_older_than_window():
+    t = SpendTracker()
+    t.mark_seen("old", ts_ms=1000)
+    t.mark_seen("new", ts_ms=9000)
+    t.prune_seen(keep_after_ms=5000)
+    assert not t.already_seen("old")
+    assert t.already_seen("new")
+
+
+def test_fetch_start_ms_uses_floor_when_seen_empty():
+    assert main.fetch_start_ms(10_000, fetch_floor_ms=10_001, seen_event_ids={}) == 10_001
+
+
+def test_fetch_start_ms_clamps_overlap_to_floor():
+    seen = {"e1": 12_000}
+    # watermark 12000, overlap 5000 → 7000, but floor is 10001
+    start = main.fetch_start_ms(
+        12_000, fetch_floor_ms=10_001, seen_event_ids=seen, overlap_ms=5_000,
+    )
+    assert start == 10_001
+
+
+def test_fetch_start_ms_overlap_after_floor():
+    seen = {"e1": 20_000}
+    start = main.fetch_start_ms(
+        20_000, fetch_floor_ms=10_001, seen_event_ids=seen, overlap_ms=5_000,
+    )
+    assert start == 15_000
+
+
+def test_unknown_model_warns_once_per_day(capsys):
+    tracker = SpendTracker()
+    cfg = {
+        "projects": {"alpha": {"budget_usd": 2.0, "enforce": True}},
+        "pricing_per_million_usd": PRICING,
+    }
+    role_map = {"proj-alpha-app": "alpha"}
+    raw = [
+        _invocation_event(event_id="u1", role="proj-alpha-app", model_id="nope.model"),
+        _invocation_event(event_id="u2", role="proj-alpha-app", model_id="nope.model"),
+    ]
+    assert main.process_events(raw, cfg, tracker, role_map) == 0
+    out = capsys.readouterr().out
+    assert out.count("Unknown modelId") == 1
+
+
+# --- fail-open fetch ---
+
+def test_fetch_log_events_failure_returns_not_ok():
+    from botocore.exceptions import ClientError
+
+    logs = MagicMock()
+    logs.filter_log_events.side_effect = ClientError(
+        {"Error": {"Code": "ThrottlingException", "Message": "slow"}},
+        "FilterLogEvents",
+    )
+    events, ok = main.fetch_log_events(logs, "/g", 0, page_cap=None)
+    assert events == []
+    assert ok is False
+
+
+def test_fetch_log_events_respects_ministack_page_cap():
+    logs = MagicMock()
+    logs.filter_log_events.return_value = {
+        "events": [{"timestamp": 1}] * 1000,
+        "nextToken": "more",
+    }
+    events, ok = main.fetch_log_events(logs, "/g", 0, page_cap=1000)
+    assert ok is True
+    assert len(events) == 1000
+    assert logs.filter_log_events.call_count == 1
+
+
+def test_fetch_log_events_paginates_without_cap():
+    logs = MagicMock()
+
+    def pages(**kwargs):
+        if kwargs.get("nextToken") == "t":
+            return {"events": [{"timestamp": 2}], "nextToken": None}
+        return {"events": [{"timestamp": 1}] * 1000, "nextToken": "t"}
+
+    logs.filter_log_events.side_effect = pages
+    events, ok = main.fetch_log_events(logs, "/g", 0, page_cap=None)
+    assert ok is True
+    assert len(events) == 1001
+    assert logs.filter_log_events.call_count == 2
+
+
+# --- leader fence ---
+
+def test_reconcile_fence_skips_iam_when_not_leader():
+    iam = MagicMock()
+    tracker = SpendTracker()
+    tracker.add_spend("alpha", 5.0)
+    blocked: set[str] = set()
+    cfg = {
+        "projects": {"alpha": {"budget_usd": 2.0, "enforce": True}},
+        "alert_thresholds": [1.0],
+    }
+    role_map = {"proj-alpha-app": "alpha"}
+    main.reconcile_enforcement(
+        iam, cfg, tracker, role_map, blocked, still_leader_fn=lambda: False,
+    )
+    iam.put_role_policy.assert_not_called()
+    assert blocked == set()
+
+
+# --- HTTP ---
+
+def test_http_health_ready_status_metrics():
+    import urllib.request
+
+    import httpapi
+
+    st = httpapi.RuntimeStatus()
+    st.set_ready(True)
+    st.set_leader(True)
+    st.update_poll(
+        day_key="2026-08-31",
+        last_poll_ok=True,
+        last_error=None,
+        watermark_ms=1_000,
+        projects={"alpha": {
+            "spend_usd": 1.0, "budget_usd": 2.0, "ratio": 0.5,
+            "blocked": False, "enforce": True,
+        }},
+    )
+    httpd = httpapi.start_http_server(0, st)
+    port = httpd.server_address[1]
+    try:
+        health = urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=3)
+        assert health.read() == b"ok\n"
+        ready = urllib.request.urlopen(f"http://127.0.0.1:{port}/readyz", timeout=3)
+        assert ready.status == 200
+        status = json.loads(
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=3).read(),
+        )
+        assert status["leader"] is True
+        assert status["last_poll_ok"] is True
+        assert status["projects"]["alpha"]["spend_usd"] == 1.0
+        metrics_body = urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/metrics", timeout=3,
+        ).read().decode()
+        assert "budget_guard_is_leader" in metrics_body
+    finally:
+        httpd.shutdown()
+
+
+def test_http_readyz_503_when_not_ready():
+    import urllib.error
+    import urllib.request
+
+    import httpapi
+
+    st = httpapi.RuntimeStatus()
+    st.set_ready(False)
+    httpd = httpapi.start_http_server(0, st)
+    port = httpd.server_address[1]
+    try:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/readyz", timeout=3)
+            raise AssertionError("expected HTTP 503")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 503
+    finally:
+        httpd.shutdown()
+
+
+# --- ConfigMap state ---
+
+def test_configmap_missing_is_fail_open_empty():
+    from k8s_state import ConfigMapStateStore
+
+    class Fake404(Exception):
+        status = 404
+
+    api = MagicMock()
+    api.read_namespaced_config_map.side_effect = Fake404()
+    store = ConfigMapStateStore("budget-guard-state", "default", api=api)
+    loaded = store.load()
+    assert loaded["spend_usd"] == {}
+    assert loaded["watermark_ms"] is None
+    assert loaded["day_key"] == utc_day_key()
+
+
+def test_configmap_roundtrip():
+    from k8s_state import ConfigMapStateStore, DATA_KEY
+
+    tracker = SpendTracker()
+    tracker.add_spend("alpha", 3.5)
+    tracker.thresholds_to_fire("alpha", 10.0, [0.3])
+    payload = persist.compact_snapshot(tracker, {"alpha"}, 99)
+
+    cm = MagicMock()
+    cm.data = {DATA_KEY: json.dumps(payload)}
+    cm.metadata.resource_version = "7"
+    api = MagicMock()
+    api.read_namespaced_config_map.return_value = cm
+    api.replace_namespaced_config_map.return_value = cm
+
+    store = ConfigMapStateStore("budget-guard-state", "ns", api=api)
+    loaded = store.load()
+    t2 = SpendTracker()
+    blocked: set[str] = set()
+    wm = persist.apply_state(t2, blocked, loaded)
+    assert wm == 99
+    assert t2.get_spend("alpha") == 3.5
+    assert blocked == {"alpha"}
+
+    tracker.add_spend("alpha", 0.5)
+    assert store.save(tracker, blocked, 100) is True
+    api.replace_namespaced_config_map.assert_called()
+    written = api.replace_namespaced_config_map.call_args[0][2]
+    saved = json.loads(written.data[DATA_KEY])
+    assert "seen_event_ids" not in saved
+    assert saved["watermark_ms"] == 100
+
+
+# --- leader election flag ---
+
+def test_election_enabled_env_and_incluster(monkeypatch):
+    import leader as leader_mod
+
+    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+    monkeypatch.setenv("BUDGET_GUARD_LEADER_ELECTION", "true")
+    assert leader_mod.election_enabled() is True
+
+    monkeypatch.setenv("BUDGET_GUARD_LEADER_ELECTION", "false")
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+    assert leader_mod.election_enabled() is False
+
+    monkeypatch.delenv("BUDGET_GUARD_LEADER_ELECTION", raising=False)
+    assert leader_mod.election_enabled() is True
+
+    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+    assert leader_mod.election_enabled() is False
+
+
+def test_lease_is_expired():
+    from datetime import datetime, timedelta, timezone
+
+    import leader as leader_mod
+
+    lease = MagicMock()
+    lease.spec.renew_time = datetime.now(timezone.utc) - timedelta(seconds=20)
+    assert leader_mod.lease_is_expired(lease, 15) is True
+    lease.spec.renew_time = datetime.now(timezone.utc)
+    assert leader_mod.lease_is_expired(lease, 15) is False
+    lease.spec.renew_time = None
+    assert leader_mod.lease_is_expired(lease, 15) is True
+
+
+def test_lease_acquire_creates_when_missing():
+    import leader as leader_mod
+
+    class Fake404(Exception):
+        status = 404
+
+    api = MagicMock()
+    api.read_namespaced_lease.side_effect = Fake404()
+    api.create_namespaced_lease.return_value = MagicMock()
+    el = leader_mod.LeaseElector("budget-guard", "ns", "pod-a", api=api)
+    assert el.try_acquire_or_renew() is True
+    api.create_namespaced_lease.assert_called()
+
+
+def test_lease_held_by_other_is_not_stolen():
+    from datetime import datetime, timezone
+
+    import leader as leader_mod
+
+    lease = MagicMock()
+    lease.spec.holder_identity = "other-pod"
+    lease.spec.renew_time = datetime.now(timezone.utc)
+    lease.spec.lease_transitions = 0
+    api = MagicMock()
+    api.read_namespaced_lease.return_value = lease
+    el = leader_mod.LeaseElector("budget-guard", "ns", "pod-a", api=api)
+    assert el.try_acquire_or_renew() is False
+    api.replace_namespaced_lease.assert_not_called()
+
+
+def test_role_map_cache_ttl(monkeypatch):
+    iam = MagicMock()
+    calls = {"n": 0}
+
+    def fake_load(_iam):
+        calls["n"] += 1
+        return {"r": "p"}
+
+    monkeypatch.setattr(roles, "load_role_project_map", fake_load)
+    cache = main.RoleMapCache(ttl_s=60)
+    monotonic = {"t": 1000.0}
+    monkeypatch.setattr(main.time, "monotonic", lambda: monotonic["t"])
+    assert cache.get(iam) == {"r": "p"}
+    assert cache.get(iam) == {"r": "p"}
+    assert calls["n"] == 1
+    monotonic["t"] = 1061.0
+    cache.get(iam)
+    assert calls["n"] == 2
+    cache.get(iam, force=True)
+    assert calls["n"] == 3
+
+
+def test_observe_poll_emits_prometheus_gauges():
+    from prometheus_client import generate_latest
+
+    tracker = SpendTracker()
+    tracker.add_spend("alpha", 1.25)
+    now = int(time.time() * 1000)
+    metrics.observe_poll(
+        cfg={"projects": {"alpha": {"budget_usd": 2.0, "enforce": True}}},
+        tracker=tracker,
+        blocked_projects=set(),
+        watermark_ms=now - 5_000,
+        applied=4,
+        duration_s=0.05,
+        fetch_ok=True,
+        now_ms=now,
+    )
+    body = generate_latest().decode()
+    assert "budget_guard_spend_usd" in body
+    assert "budget_guard_events_applied" in body

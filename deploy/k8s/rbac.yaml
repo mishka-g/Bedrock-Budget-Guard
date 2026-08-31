@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: budget-guard
+  namespace: budget-guard
+  labels:
+    app.kubernetes.io/name: bedrock-budget-guard
+  # IRSA / EKS: set the role annotation on this ServiceAccount.
+  # annotations:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/BedrockBudgetGuard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: budget-guard
+  namespace: budget-guard
+  labels:
+    app.kubernetes.io/name: bedrock-budget-guard
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: ["budget-guard"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["budget-guard-state"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: budget-guard
+  namespace: budget-guard
+  labels:
+    app.kubernetes.io/name: bedrock-budget-guard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: budget-guard
+subjects:
+  - kind: ServiceAccount
+    name: budget-guard
+    namespace: budget-guard

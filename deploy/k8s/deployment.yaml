@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: budget-guard
+  namespace: budget-guard
+  labels:
+    app.kubernetes.io/name: bedrock-budget-guard
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bedrock-budget-guard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bedrock-budget-guard
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: budget-guard
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: budget-guard
+          image: bedrock-budget-guard:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: BUDGET_GUARD_CONFIG
+              value: /app/config/config.yaml
+            - name: BUDGET_GUARD_STATE_BACKEND
+              value: configmap
+            - name: BUDGET_GUARD_STATE_CONFIGMAP
+              value: budget-guard-state
+            - name: BUDGET_GUARD_LEASE_NAME
+              value: budget-guard
+            - name: BUDGET_GUARD_HTTP_PORT
+              value: "8080"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: AWS_DEFAULT_REGION
+              value: eu-west-1
+            - name: SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: budget-guard
+                  key: SLACK_WEBHOOK_URL
+                  optional: true
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: budget-guard-config
+        - name: tmp
+          emptyDir: {}

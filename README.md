@@ -16,6 +16,8 @@ Full stack: ministack emulator + seed + generator + guard.
 cp .env.example .env
 make up
 make logs-guard   # STATUS / ALERT / BLOCKED / UNBLOCKED
+# curl http://127.0.0.1:8080/status   # JSON spend vs budget
+# curl http://127.0.0.1:8080/metrics
 ```
 
 ```bash
@@ -78,6 +80,7 @@ docker run --rm \
   -e AWS_ENDPOINT_URL= \
   -e BUDGET_GUARD_CONFIG=/app/config.yaml \
   -e BUDGET_GUARD_STATE=/app/state/state.json \
+  -p 8080:8080 \
   -v "$PWD/budget-guard/config.aws.yaml:/app/config.yaml:ro" \
   -v budget-guard-aws-state:/app/state \
   bedrock-budget-guard
@@ -86,7 +89,7 @@ docker run --rm \
 Tear down:
 
 ```bash
-make aws-down
+make aws-down    # stops containers; keeps the state volume
 ```
 
 ### Safe test checklist
@@ -96,6 +99,27 @@ make aws-down
 3. Flip `enforce: true` on one low-budget test project → expect `BLOCKED` and an
    inline policy `BudgetGuardDenyBedrock` on that project’s roles.
 4. Set `enforce: false` again → `UNBLOCKED` within one poll.
+
+## Kubernetes
+
+Production: two replicas, Lease leader election, compact state in a
+ConfigMap (not DynamoDB). See [`deploy/README.md`](deploy/README.md).
+
+```bash
+docker build -t bedrock-budget-guard .
+kubectl apply -k deploy/k8s
+```
+
+Edit the `budget-guard-config` ConfigMap (projects, prices), attach IRSA
+or a node role using [`deploy/iam-policy.json`](deploy/iam-policy.json),
+import [`deploy/grafana/budget-guard.json`](deploy/grafana/budget-guard.json).
+
+HTTP on every pod (standby and leader): `/healthz`, `/readyz`, `/metrics`,
+`/status`. Grafana FinOps panels use `budget_guard_is_leader == 1`.
+
+**Fail-open:** if CloudWatch Logs cannot be read, last spend is kept and
+no extra Deny is attached. Alert on `budget_guard_log_fetch_errors_total`
+and `budget_guard_iam_put_failures_total`.
 
 ## Config
 
@@ -132,9 +156,11 @@ Stdout always continues; Slack failures are logged as `WARN` and ignored.
 |---|---|
 | `budget-guard/` | Guard daemon, local config, unit tests |
 | `budget-guard/Dockerfile` | Image for **local demo** Compose |
-| `Dockerfile` | Standalone / **real AWS** image |
+| `Dockerfile` | Standalone / **real AWS** / **Kubernetes** image (no baked config) |
 | `docker-compose.yaml` | Local demo stack |
 | `docker-compose.aws.yaml` | Guard only → real AWS |
+| `deploy/k8s/` | Kubernetes manifests (2 replicas, Lease, ConfigMap state) |
+| `deploy/grafana/budget-guard.json` | Grafana dashboard |
 | `deploy/iam-policy.json` | IAM permissions for the guard |
 | `seed/` / `generator/` | Local demo only |
 | `DESIGN.md` | Product design and trade-offs |

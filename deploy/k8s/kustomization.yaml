@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: budget-guard
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - configmap.yaml
+  - secret.yaml
+  - deployment.yaml
+  - service.yaml
+  - pdb.yaml
+# ServiceMonitor is optional (Prometheus Operator). Apply separately:
+#   kubectl apply -f servicemonitor.yaml

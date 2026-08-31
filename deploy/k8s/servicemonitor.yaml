@@ -1,0 +1,21 @@
+# Optional: apply only if you run Prometheus Operator.
+# kubectl apply -f deploy/k8s/servicemonitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: budget-guard
+  namespace: budget-guard
+  labels:
+    app.kubernetes.io/name: bedrock-budget-guard
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bedrock-budget-guard
+  namespaceSelector:
+    matchNames:
+      - budget-guard
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

@@ -8,4 +8,5 @@ Python daemon sources live here.
 - [config.aws.example.yaml](config.aws.example.yaml) — template for real AWS
 - [Dockerfile](Dockerfile) — **local demo** image only (`docker-compose.yaml`)
 
-Standalone / real-AWS image is the [root Dockerfile](../Dockerfile).
+Standalone / Kubernetes image is the [root Dockerfile](../Dockerfile)
+(no baked config, non-root, port 8080).

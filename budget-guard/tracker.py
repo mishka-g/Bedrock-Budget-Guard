@@ -43,14 +43,17 @@ class SpendTracker:
     """In-memory per-project spend for the current UTC day.
 
     Dedups CloudWatch eventIds so overlapping FilterLogEvents windows
-    do not double-count. Tracks which alert thresholds already fired.
+    do not double-count. Seen IDs are kept only for the overlap window
+    (not persisted). Tracks which alert thresholds already fired.
     """
 
     day_key: str = field(default_factory=utc_day_key)
     spend_usd: dict[str, float] = field(default_factory=dict)
-    seen_event_ids: set[str] = field(default_factory=set)
+    # event_id → timestamp_ms; pruned to the watermark overlap window.
+    seen_event_ids: dict[str, int] = field(default_factory=dict)
     fired_thresholds: dict[str, set[float]] = field(default_factory=dict)
     warned_unconfigured: set[str] = field(default_factory=set)
+    warned_unknown_models: set[str] = field(default_factory=set)
 
     def reset_for_new_day(self, day_key: str | None = None) -> None:
         self.day_key = day_key or utc_day_key()
@@ -58,6 +61,7 @@ class SpendTracker:
         self.seen_event_ids.clear()
         self.fired_thresholds.clear()
         self.warned_unconfigured.clear()
+        self.warned_unknown_models.clear()
 
     def maybe_roll_day(self) -> bool:
         """If UTC day changed, reset and return True."""
@@ -70,8 +74,14 @@ class SpendTracker:
     def already_seen(self, event_id: str) -> bool:
         return event_id in self.seen_event_ids
 
-    def mark_seen(self, event_id: str) -> None:
-        self.seen_event_ids.add(event_id)
+    def mark_seen(self, event_id: str, ts_ms: int = 0) -> None:
+        self.seen_event_ids[event_id] = int(ts_ms)
+
+    def prune_seen(self, keep_after_ms: int) -> None:
+        """Drop IDs older than the overlap window."""
+        stale = [k for k, ts in self.seen_event_ids.items() if ts < keep_after_ms]
+        for k in stale:
+            del self.seen_event_ids[k]
 
     def add_spend(self, project: str, amount_usd: float) -> float:
         self.spend_usd[project] = self.spend_usd.get(project, 0.0) + amount_usd
@@ -100,4 +110,11 @@ class SpendTracker:
         if project in self.warned_unconfigured:
             return False
         self.warned_unconfigured.add(project)
+        return True
+
+    def mark_unknown_model_warned(self, model_id: str) -> bool:
+        """Return True if this is the first unknown-model warn today."""
+        if model_id in self.warned_unknown_models:
+            return False
+        self.warned_unknown_models.add(model_id)
         return True

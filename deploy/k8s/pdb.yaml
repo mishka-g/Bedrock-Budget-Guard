@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: budget-guard
+  namespace: budget-guard
+  labels:
+    app.kubernetes.io/name: bedrock-budget-guard
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bedrock-budget-guard

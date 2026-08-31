@@ -18,8 +18,11 @@ services:
     environment:
       BUDGET_GUARD_CONFIG: /app/config.yaml
       BUDGET_GUARD_STATE: /app/state/state.json
+      BUDGET_GUARD_HTTP_PORT: "8080"
       # Force real AWS (overrides a mistaken AWS_ENDPOINT_URL in .env.aws).
       AWS_ENDPOINT_URL: ""
+    ports:
+      - "8080:8080"
     volumes:
       - ./budget-guard/config.aws.yaml:/app/config.yaml:ro
       - budget-guard-aws-state:/app/state

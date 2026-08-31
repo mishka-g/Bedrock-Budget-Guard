@@ -1,3 +1,4 @@
-boto3
-pyyaml
-pytest
+boto3==1.40.21
+PyYAML==6.0.2
+prometheus_client==0.21.1
+kubernetes==32.0.1

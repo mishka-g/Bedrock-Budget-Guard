@@ -34,13 +34,14 @@ counts. Tokens are only an input to pricing.
 ```mermaid
 flowchart TD
   config[config.yaml hot-reload]
-  loop[run_loop]
+  loop[run_loop leader only]
   roles[IAM role to project map]
   logs[FilterLogEvents watermark]
   cost[cost.event_cost_usd]
-  tracker[SpendTracker plus state.json]
+  tracker[SpendTracker compact state]
   enforce[IAM Deny attach or lift]
   alert[stdout ALERT BLOCKED]
+  http["HTTP /metrics /status"]
 
   config --> loop
   loop --> roles
@@ -48,11 +49,16 @@ flowchart TD
   logs --> cost --> tracker
   tracker --> enforce
   tracker --> alert
+  tracker --> http
   enforce --> alert
 ```
 
 Each poll: reload config → optional UTC day roll → refresh IAM map →
-incremental logs → price & accumulate → alert / enforce → persist state.
+incremental logs → price & accumulate → alert / enforce → persist compact
+state. Only the leader replica runs this loop; standbys serve HTTP.
+
+In Kubernetes, two replicas share a `Lease` (leader election) and a
+ConfigMap for compact state. Local demo still uses `state.json` on a volume.
 
 ### Runtime shape
 
@@ -106,6 +112,32 @@ soft (`WARN` on stdout).
 If every IAM put fails, we warn and retry on the next poll — we do not
 claim the project is paused.
 
+### Fail-open
+
+If `FilterLogEvents` fails, the poll keeps last known spend, does not
+advance the watermark, and does **not** attach a blanket Deny. Existing
+blocks stay in IAM; new spend is not counted until logs work again.
+IAM put failures are the same: warn, increment metrics, retry next poll.
+
+This is intentional: a CloudWatch outage must not pause every project.
+SRE must page on `budget_guard_log_fetch_errors_total` and
+`budget_guard_iam_put_failures_total` instead.
+
+### Observability
+
+Port **8080** (override `BUDGET_GUARD_HTTP_PORT`):
+
+| Path | Purpose |
+|---|---|
+| `/metrics` | Prometheus (FinOps gauges + SRE counters) |
+| `/healthz` | Process up |
+| `/readyz` | Ready to serve (standby and leader) |
+| `/status` | JSON spend vs budget, `last_poll_ok`, `last_error` |
+
+Grafana: import [deploy/grafana/budget-guard.json](deploy/grafana/budget-guard.json).
+FinOps panels filter `budget_guard_is_leader == 1` so standby scrapes do
+not zero the charts.
+
 ### Enforcement and lift
 
 When `enforce: true` and spend ≥ budget, we attach an inline IAM policy
@@ -133,8 +165,9 @@ AWS CloudWatch Logs.
 
 That API can return large pages; we **do not** re-scan the whole day. We
 keep a watermark and only fetch what is new, with a short overlap. Overlap
-duplicates are dropped by `eventId` (or a synthetic key when an emulator
-omits `eventId`).
+duplicates are dropped by an **in-memory** `eventId` set limited to the
+overlap window. Against ministack, each poll stops at 1000 events; against
+real AWS we paginate until the page is empty.
 
 ### Why a daemon with hot-reloaded config
 
@@ -143,20 +176,38 @@ Editing a mounted `config.yaml` without rebuilding the image matches how
 FinOps and on-call actually work. A scheduled one-shot job would be
 slower to react and awkward for unblock.
 
-### Why file-backed state (not only memory)
+### Why compact persisted state (not a full event log)
 
-Spend, watermark, fired thresholds, seen event IDs, and the blocked-project
-set are written to `state.json` after every poll (`BUDGET_GUARD_STATE`,
-default `/app/state/state.json`). A mid-day restart resumes without
-re-alerting or undercounting from a cold watermark.
+Spend, watermark, fired thresholds, and the blocked-project set are
+written after every poll. Seen event IDs are **not** persisted — they
+exist only to dedup the overlap window in the running process.
 
-As a safety net, startup also **discovers** roles that already carry
-`BudgetGuardDenyBedrock` and merges those projects into the blocked set.
-That covers a missing/corrupt state file while Denys still linger in IAM.
+- **Local demo:** `state.json` (`BUDGET_GUARD_STATE`, default
+  `/app/state/state.json`).
+- **Kubernetes:** the same JSON in ConfigMap `budget-guard-state`. That is
+  small enough for etcd and avoids DynamoDB.
+
+A mid-day restart or failover resumes from the watermark. The first fetch
+after restore starts at `watermark + 1` (no overlap) so already-counted
+spend is not priced twice. IAM Deny discovery still merges lingering
+blocks if state is missing.
+
+If the ConfigMap is missing, we **fail-open**: watermark at now − 60s,
+empty spend, no new Deny until real traffic is counted.
 
 State for a previous UTC day is discarded on load (same semantics as day
 roll). Locally, `make down` uses `down -v` and wipes the Compose volume —
-fresh demos start clean.
+fresh demos start clean. `make aws-down` does **not** delete the volume.
+
+### High availability
+
+Two Deployment replicas. A Kubernetes `Lease` (`coordination.k8s.io`)
+picks one leader. Followers serve `/metrics` and `/healthz` with
+`budget_guard_is_leader 0`. Before IAM mutate, the leader re-checks the
+lease (fence) so a slow poll cannot Deny after losing leadership.
+
+SIGTERM flushes compact state and exits; the lease expires and the
+standby takes over.
 
 ### Pricing source of truth in v1
 
@@ -168,29 +219,18 @@ remains the override even if sync is added later.
 
 `AWS_ENDPOINT_URL` is optional. Set it for ministack (or any custom
 endpoint); leave it unset for standard AWS. Seed and generator are demo-only;
-the guard itself needs only Logs + IAM.
+the guard itself needs only Logs + IAM. Kubernetes (two replicas, Lease,
+ConfigMap state) is the production shape; see High availability above.
 
 ## Future features
 
 Not built yet; listed so the roadmap is explicit.
-
-### Stronger durability
-
-Replicate or back up `state.json` (or move to a small store) for
-multi-replica / multi-host deployments. Today a single daemon + volume
-(or local file) is enough.
 
 ### Per-region pricing model
 
 Price by region (or sync from the AWS Price List / Bulk API), so
 `eu-west-1` vs US list prices stay accurate. Config should remain a
 manual override; sync must fail soft if the price API is unreachable.
-
-### Dashboards
-
-Export metrics or a simple view of spend vs budget over the UTC day
-(per project, maybe per role). Logs are enough to demo; dashboards help
-FinOps day to day.
 
 ### Alerts
 

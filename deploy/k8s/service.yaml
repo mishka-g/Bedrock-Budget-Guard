@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: budget-guard
+  namespace: budget-guard
+  labels:
+    app.kubernetes.io/name: bedrock-budget-guard
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: bedrock-budget-guard
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

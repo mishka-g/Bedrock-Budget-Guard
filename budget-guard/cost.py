@@ -5,10 +5,7 @@ skipped with a warning — we never invent a price.
 """
 from __future__ import annotations
 
-import logging
 from typing import Any
-
-logger = logging.getLogger("budget-guard")
 
 
 def event_cost_usd(message: dict[str, Any], pricing: dict[str, dict[str, float]]) -> float | None:
@@ -20,15 +17,10 @@ def event_cost_usd(message: dict[str, Any], pricing: dict[str, dict[str, float]]
     """
     model_id = message.get("modelId")
     if not isinstance(model_id, str) or not model_id:
-        logger.warning("Skipping event with missing modelId")
         return None
 
     rates = pricing.get(model_id)
     if rates is None:
-        logger.warning(
-            "Unknown modelId %r — no pricing in config; skipping cost",
-            model_id,
-        )
         return None
 
     inp = message.get("input") or {}

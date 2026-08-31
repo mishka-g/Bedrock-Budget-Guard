@@ -32,7 +32,7 @@ aws-up:
 	docker compose -f docker-compose.aws.yaml up -d --build
 
 aws-down:
-	docker compose -f docker-compose.aws.yaml down -v
+	docker compose -f docker-compose.aws.yaml down
 
 aws-logs:
 	docker compose -f docker-compose.aws.yaml logs -f budget-guard

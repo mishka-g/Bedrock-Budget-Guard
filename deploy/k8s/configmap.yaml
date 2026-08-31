@@ -1,0 +1,43 @@
+# Copy of a starter config. Edit after apply, or replace from
+# budget-guard/config.aws.yaml before going live. The Deployment mounts
+# this directory so kubelet updates are visible to hot-reload.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: budget-guard-config
+  namespace: budget-guard
+  labels:
+    app.kubernetes.io/name: bedrock-budget-guard
+data:
+  config.yaml: |
+    poll_interval_seconds: 30
+    log_group: /aws/bedrock/modelinvocations
+    alert_thresholds: [0.8, 1.0]
+    alerts:
+      slack:
+        enabled: false
+        webhook_url: ""
+        events: [ALERT, BLOCKED, UNBLOCKED]
+    projects:
+      my-team:
+        budget_usd: 10.0
+        enforce: false
+    pricing_per_million_usd:
+      "anthropic.claude-3-5-haiku-20241022-v1:0":
+        input: 0.8
+        output: 4.0
+        cache_read: 0.08
+        cache_write: 1.0
+---
+# Seed with a stale day so the first leader starts fail-open (empty spend)
+# until it writes a real snapshot. Do not put seen_event_ids here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: budget-guard-state
+  namespace: budget-guard
+  labels:
+    app.kubernetes.io/name: bedrock-budget-guard
+data:
+  state.json: |
+    {"version": 2, "day_key": "1970-01-01", "spend_usd": {}, "fired_thresholds": {}, "warned_unconfigured": [], "blocked_projects": [], "watermark_ms": null}
