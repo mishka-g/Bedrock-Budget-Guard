@@ -94,7 +94,7 @@ billed separately from normal input—same idea as real Bedrock pricing.
 
 Demo rates follow public **US-style** list prices so the local simulator’s
 ~\$1.2/min alpha traffic hits a ~\$2 budget in about two minutes. Real
-`eu-west-1` prices can differ (often ~10% higher). See Future features.
+`eu-west-1` prices can differ (often ~10% higher). See [ROADMAP.md](ROADMAP.md).
 
 ### Alerts
 
@@ -222,18 +222,4 @@ endpoint); leave it unset for standard AWS. Seed and generator are demo-only;
 the guard itself needs only Logs + IAM. Kubernetes (two replicas, Lease,
 ConfigMap state) is the production shape; see High availability above.
 
-## Future features
-
-Not built yet; listed so the roadmap is explicit.
-
-### Per-region pricing model
-
-Price by region (or sync from the AWS Price List / Bulk API), so
-`eu-west-1` vs US list prices stay accurate. Config should remain a
-manual override; sync must fail soft if the price API is unreachable.
-
-### Alerts
-
-Push notifications beyond Slack Incoming Webhooks—PagerDuty, email, or
-richer routing by project—with the same once-per-threshold semantics.
-Stdout stays useful for local review.
+What to build next lives in [ROADMAP.md](ROADMAP.md).

@@ -6,7 +6,8 @@ attaching an IAM Deny. When the budget day resets—or you turn enforcement
 off—access is restored.
 
 Projects come from the IAM tag `project` on workload roles. See
-[DESIGN.md](DESIGN.md) for architecture and trade-offs.
+[DESIGN.md](DESIGN.md) for architecture and [ROADMAP.md](ROADMAP.md) for
+what to build next.
 
 ## Local demo (Docker)
 
@@ -170,3 +171,4 @@ Stdout always continues; Slack failures are logged as `WARN` and ignored.
 | `.github/workflows/ci.yml` | PR/main CI: tests, security, image build |
 | `seed/` / `generator/` | Local demo only |
 | `DESIGN.md` | Product design and trade-offs |
+| `ROADMAP.md` | Priorities for what to build next |

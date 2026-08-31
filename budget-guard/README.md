@@ -4,6 +4,7 @@ Python daemon sources live here.
 
 - [README.md](../README.md) — local demo and real AWS
 - [DESIGN.md](../DESIGN.md) — architecture and trade-offs
+- [ROADMAP.md](../ROADMAP.md) — what to build next
 - [config.yaml](config.yaml) — local demo budgets / pricing
 - [config.aws.example.yaml](config.aws.example.yaml) — template for real AWS
 - [Dockerfile](Dockerfile) — **local demo** image only (`docker-compose.yaml`)
